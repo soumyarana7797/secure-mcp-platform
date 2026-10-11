@@ -1,4 +1,4 @@
-"""Forwards tool calls to backends: look up, validate, forward with a timeout, map errors."""
+"""Forwards tool calls: look up, authorize, validate, forward with a timeout, map errors."""
 
 import asyncio
 import logging
@@ -11,7 +11,7 @@ from mcp import MCPError
 from mcp_types import INVALID_PARAMS, CallToolResult, TextContent
 
 from apps.gateway.router.catalog import ToolCatalog
-from apps.gateway.router.connector import BackendConnector
+from shared.auth.principal import principal_var
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +43,26 @@ def _validation_messages(schema: dict[str, Any], arguments: dict[str, Any]) -> l
 
 
 class ToolProxy:
-    def __init__(self, catalog: ToolCatalog, connectors: dict[str, BackendConnector]) -> None:
+    def __init__(self, catalog: ToolCatalog) -> None:
         self._catalog = catalog
-        self._connectors = connectors
 
-    async def call_tool(self, public_name: str, arguments: dict[str, Any] | None) -> CallToolResult:
+    async def call_tool(
+        self,
+        public_name: str,
+        arguments: dict[str, Any] | None,
+        permissions: frozenset[str],
+    ) -> CallToolResult:
         started = time.perf_counter()
         outcome = "ok"
+        principal = principal_var.get()
         try:
             entry = self._catalog.get(public_name)
             if entry is None:
                 outcome = "unknown_tool"
-                # Protocol error: the client asked for something that does not exist.
+                raise MCPError(INVALID_PARAMS, f"Unknown tool: {public_name}")
+            if entry.permission not in permissions:
+                # Same response as an unknown tool, so callers cannot probe which tools exist.
+                outcome = "denied"
                 raise MCPError(INVALID_PARAMS, f"Unknown tool: {public_name}")
 
             args = arguments or {}
@@ -65,7 +73,7 @@ class ToolProxy:
 
             try:
                 async with asyncio.timeout(entry.timeout_s):
-                    async with self._connectors[entry.backend].connect() as client:
+                    async with entry.connector.connect() as client:
                         result = await client.call_tool(entry.original_name, args)
             except TimeoutError:
                 outcome = "timeout"
@@ -79,8 +87,10 @@ class ToolProxy:
             return result
         finally:
             logger.info(
-                "tool_call tool=%s outcome=%s ms=%.1f",
+                "tool_call tool=%s outcome=%s tenant=%s user=%s ms=%.1f",
                 public_name,
                 outcome,
+                principal.tenant_slug if principal else "-",
+                principal.user_id if principal else "-",
                 (time.perf_counter() - started) * 1000,
             )

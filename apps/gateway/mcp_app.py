@@ -6,18 +6,26 @@ from mcp_types import CallToolRequestParams, CallToolResult, ListToolsResult, Pa
 
 from apps.gateway.router.catalog import ToolCatalog
 from apps.gateway.router.proxy import ToolProxy
+from shared.auth.principal import principal_var
+from shared.policies.engine import PolicyEngine
 
 
-def build_gateway_server(catalog: ToolCatalog, proxy: ToolProxy) -> Server:
+def build_gateway_server(catalog: ToolCatalog, proxy: ToolProxy, policy: PolicyEngine) -> Server:
+    async def permissions() -> frozenset[str]:
+        principal = principal_var.get()
+        if principal is None:  # the auth middleware guarantees one; fail closed regardless
+            return frozenset()
+        return await policy.permissions_for(principal)
+
     async def on_list_tools(
         ctx: ServerRequestContext, params: PaginatedRequestParams | None
     ) -> ListToolsResult:
-        return ListToolsResult(tools=catalog.tools())
+        return ListToolsResult(tools=catalog.tools_for(await permissions()))
 
     async def on_call_tool(
         ctx: ServerRequestContext, params: CallToolRequestParams
     ) -> CallToolResult:
-        return await proxy.call_tool(params.name, params.arguments)
+        return await proxy.call_tool(params.name, params.arguments, await permissions())
 
     return Server(
         "secure-mcp-gateway",

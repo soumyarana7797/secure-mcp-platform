@@ -3,10 +3,13 @@ name = "secure-mcp-platform"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
     "mcp>=2.3.0",
+    "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.1.4",
 ]
 
 [dependency-groups]
@@ -29,4 +32,5 @@ select = ["E", "F", "I", "B", "UP", "S"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S106"]
+"migrations/**" = ["S608"]  # f-string interpolates a constant SQL fragment, no user input
 "apps/football_data_api/**" = ["S311"]  # fake data generator, not security-sensitive

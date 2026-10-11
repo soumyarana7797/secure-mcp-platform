@@ -11,14 +11,23 @@ async def healthz() -> dict[str, str]:
 
 @router.get("/readyz")
 async def readyz(request: Request, response: Response) -> dict[str, object]:
-    """Readiness: can the gateway serve traffic? Reports per-backend discovery status."""
+    """Readiness: registry loaded, a backend serving tools, and the database reachable."""
     catalog = request.app.state.catalog
-    if not catalog.ready:
+    db = request.app.state.db
+    db_ok = await db.ping() if db is not None else True
+    ready = catalog.ready and db_ok
+    if not ready:
         response.status_code = 503
     return {
-        "status": "ready" if catalog.ready else "not_ready",
+        "status": "ready" if ready else "not_ready",
+        "database": db_ok,
+        # Public endpoint: keep it minimal. Drift and unregistered-tool details go to the logs.
         "backends": {
-            name: {"healthy": s.healthy, "tools": s.tool_count, "error": s.error}
+            name: {
+                "healthy": s.healthy,
+                "exposed_tools": s.exposed,
+                "degraded": bool(s.drifted or s.missing),
+            }
             for name, s in catalog.status.items()
         },
     }

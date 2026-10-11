@@ -1,8 +1,5 @@
 """Backend registry: which MCP servers the gateway may route to."""
 
-import tomllib
-from pathlib import Path
-
 from pydantic import BaseModel, Field
 
 
@@ -15,17 +12,3 @@ class BackendSpec(BaseModel, frozen=True):
 
     def timeout_for(self, tool_name: str) -> float:
         return self.tool_timeouts.get(tool_name, self.timeout_s)
-
-
-class Registry(BaseModel):
-    backends: list[BackendSpec]
-
-    def model_post_init(self, _: object) -> None:
-        names = [b.name for b in self.backends]
-        if len(names) != len(set(names)):
-            raise ValueError("duplicate backend names in registry")
-
-    @classmethod
-    def from_toml(cls, path: str | Path) -> "Registry":
-        with Path(path).open("rb") as f:
-            return cls.model_validate(tomllib.load(f))

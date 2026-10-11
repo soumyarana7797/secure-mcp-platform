@@ -1,9 +1,15 @@
-# Registered MCP backends. Phase 3 replaces this file with database tables.
+# Registry MANIFEST: what an admin intends to expose. `scripts/registry_admin.py sync` reads
+# this, fetches each backend's live tools, and pins the approved definitions into PostgreSQL.
+# The running gateway reads only the database.
 [[backends]]
 name = "football"
 url = "http://127.0.0.1:9002/mcp"
+audience = "mcp-football"
 timeout_s = 5.0
 
-# Optional per-tool timeout overrides (seconds), keyed by the backend's own tool name.
-[backends.tool_timeouts]
-get_live_scores = 3.0
+[backends.tools.get_fixtures]
+permission = "football:read"
+
+[backends.tools.get_live_scores]
+permission = "football:read"
+timeout_s = 3.0
