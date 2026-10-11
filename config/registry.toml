@@ -1,0 +1,9 @@
+# Registered MCP backends. Phase 3 replaces this file with database tables.
+[[backends]]
+name = "football"
+url = "http://127.0.0.1:9002/mcp"
+timeout_s = 5.0
+
+# Optional per-tool timeout overrides (seconds), keyed by the backend's own tool name.
+[backends.tool_timeouts]
+get_live_scores = 3.0
