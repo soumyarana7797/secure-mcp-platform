@@ -416,7 +416,7 @@ async def test_http_requires_authentication_but_health_is_public() -> None:
             assert (await c.get("/readyz")).status_code == 200
             rejected = await c.post("/mcp", json=RPC, headers=ACCEPT)
     assert rejected.status_code == 401
-    assert rejected.headers["www-authenticate"] == "Bearer"
+    assert rejected.headers["www-authenticate"].startswith("Bearer resource_metadata=")
 
 
 @pytest.mark.anyio

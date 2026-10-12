@@ -20,8 +20,15 @@ from apps.gateway.middleware.request_id import RequestIdMiddleware
 from apps.gateway.router.catalog import ConnectorFactory, ToolCatalog
 from apps.gateway.router.connector import HttpBackendConnector
 from apps.gateway.router.proxy import ToolProxy
-from apps.gateway.routes import health
-from shared.auth.resolver import DenyAllResolver, DevHeaderResolver, PrincipalResolver
+from apps.gateway.routes import health, oauth
+from shared.auth.jwt_validator import HttpJwksSource, JwksCache, TokenValidator
+from shared.auth.resolver import (
+    BearerTokenResolver,
+    DbPrincipalLookup,
+    DenyAllResolver,
+    DevHeaderResolver,
+    PrincipalResolver,
+)
 from shared.db.database import Database
 from shared.observability.logging import configure_logging
 from shared.policies.engine import DbPolicyEngine, PolicyEngine
@@ -50,9 +57,16 @@ def create_app(
         db = Database(cfg.database_url)
 
     if resolver is None:
+        lookup = DbPrincipalLookup(db)  # type: ignore[arg-type]
         if cfg.auth_mode == "dev_header":
             logger.warning("AUTH MODE dev_header: any caller can claim any identity (local only)")
-            resolver = DevHeaderResolver(db)  # type: ignore[arg-type]
+            resolver = DevHeaderResolver(lookup)
+        elif cfg.auth_mode == "cognito":
+            jwks = JwksCache(HttpJwksSource(f"{cfg.cognito_issuer}/.well-known/jwks.json"))
+            validator = TokenValidator(
+                cfg.cognito_issuer, frozenset(cfg.cognito_client_ids), cfg.required_scope, jwks
+            )
+            resolver = BearerTokenResolver(validator, lookup)
         else:
             resolver = DenyAllResolver()
     registry = registry or DbRegistryProvider(db)  # type: ignore[arg-type]
@@ -99,11 +113,14 @@ def create_app(
                 await db.close()
 
     app = FastAPI(title="Secure MCP Gateway", lifespan=lifespan)
+    app.state.settings = cfg
     app.state.catalog = catalog
     app.state.db = db
     # Last added = outermost: request ID first, then authentication, then routes.
-    app.add_middleware(AuthMiddleware, resolver=resolver)
+    metadata_url = f"{cfg.public_base_url.rstrip('/')}/.well-known/oauth-protected-resource"
+    app.add_middleware(AuthMiddleware, resolver=resolver, resource_metadata_url=metadata_url)
     app.add_middleware(RequestIdMiddleware)
     app.include_router(health.router)
+    app.include_router(oauth.router)
     app.mount("/", mcp_http_app)  # last: catch-all that serves /mcp
     return app

@@ -14,7 +14,7 @@ from psycopg.rows import dict_row
 from apps.gateway.config import Settings
 from apps.gateway.main import create_app
 from shared.auth.principal import Principal
-from shared.auth.resolver import DevHeaderResolver
+from shared.auth.resolver import DbPrincipalLookup, DevHeaderResolver
 from shared.db.database import Database
 from shared.policies.engine import DbPolicyEngine
 from shared.registry.admin import sync_backend
@@ -120,7 +120,7 @@ async def test_runtime_role_is_read_only(app_db: Database) -> None:
 
 @pytest.mark.anyio
 async def test_dev_resolver_maps_a_sub_to_a_principal(app_db: Database) -> None:
-    resolver = DevHeaderResolver(app_db)
+    resolver = DevHeaderResolver(DbPrincipalLookup(app_db))
     alice = await resolver.resolve({"x-dev-sub": "sub-alice"})
     assert alice and alice.tenant_slug == "acme" and alice.roles == {"analyst"}
     assert await resolver.resolve({"x-dev-sub": "sub-nobody"}) is None
@@ -131,7 +131,7 @@ async def test_dev_resolver_maps_a_sub_to_a_principal(app_db: Database) -> None:
 async def test_disabled_user_or_suspended_tenant_cannot_authenticate(
     app_db: Database, seeded: dict[str, str]
 ) -> None:
-    resolver = DevHeaderResolver(app_db)
+    resolver = DevHeaderResolver(DbPrincipalLookup(app_db))
     with psycopg.connect(seeded["owner"], autocommit=True) as conn:
         conn.execute("UPDATE users SET status = 'disabled' WHERE cognito_sub = 'sub-bob'")
         conn.execute("UPDATE tenants SET status = 'suspended' WHERE slug = 'globex'")
@@ -144,7 +144,7 @@ async def test_disabled_user_or_suspended_tenant_cannot_authenticate(
 async def test_policy_returns_permissions_for_the_principals_tenant_and_roles(
     app_db: Database,
 ) -> None:
-    resolver, policy = DevHeaderResolver(app_db), DbPolicyEngine(app_db)
+    resolver, policy = DevHeaderResolver(DbPrincipalLookup(app_db)), DbPolicyEngine(app_db)
     alice = await resolver.resolve({"x-dev-sub": "sub-alice"})
     bob = await resolver.resolve({"x-dev-sub": "sub-bob"})
     carol = await resolver.resolve({"x-dev-sub": "sub-carol"})

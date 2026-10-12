@@ -1040,6 +1040,7 @@ dependencies = [
     { name = "mcp" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy" },
 ]
 
@@ -1058,6 +1059,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.6" },
     { name = "pydantic-settings", specifier = ">=2.15.0" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
     { name = "sqlalchemy", specifier = ">=2.1.4" },
 ]
 
