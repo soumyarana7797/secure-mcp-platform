@@ -52,12 +52,18 @@ LAB_MANIFEST = BackendManifest(
 )
 
 
-async def pin(dsns: dict[str, str], manifest: BackendManifest, server, *, approve: bool = False):
+async def pin(
+    dsns: dict[str, str],
+    manifest: BackendManifest,
+    server=None,  # noqa: ANN001
+    *,
+    approve: bool = False,
+    live=None,  # noqa: ANN001  (an already-fetched tool list, instead of asking `server`)
+):
+    tools = live if live is not None else await live_tools(server)
     async with await AsyncConnection.connect(dsns["owner"], row_factory=dict_row) as conn:
         async with conn.transaction():
-            return await sync_backend(
-                conn, manifest, await live_tools(server), approve_changes=approve
-            )
+            return await sync_backend(conn, manifest, tools, approve_changes=approve)
 
 
 # ------------------------------------------------------------------ row-level security

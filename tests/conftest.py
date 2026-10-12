@@ -42,6 +42,12 @@ def db_dsns() -> dict[str, str]:
     except psycopg.OperationalError:
         pytest.skip("PostgreSQL is not running (docker compose up -d)")
     dsns = {"owner": with_db(owner, TEST_DB), "app": with_db(app, TEST_DB)}
+    for name, var in (
+        ("user", "USER_SERVER_DATABASE_URL"),
+        ("knowledge", "KNOWLEDGE_SERVER_DATABASE_URL"),
+    ):
+        if os.environ.get(var):
+            dsns[name] = with_db(os.environ[var], TEST_DB)
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "migrations"))
     cfg.set_main_option("sqlalchemy.url", dsns["owner"])
@@ -65,6 +71,17 @@ def seeded(db_dsns: dict[str, str]) -> dict[str, str]:
 async def app_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
     """A pool connected as the runtime role (`gateway_app`): what the gateway really uses."""
     db = Database(seeded["app"])
+    await db.open()
+    yield db
+    await db.close()
+
+
+@pytest.fixture
+async def user_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
+    """A pool connected as `user_svc`, the user server's least-privilege role."""
+    if "user" not in seeded:
+        pytest.skip("USER_SERVER_DATABASE_URL not set (see .env.example)")
+    db = Database(seeded["user"])
     await db.open()
     yield db
     await db.close()

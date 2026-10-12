@@ -6,6 +6,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: gateway
       GATEWAY_APP_PASSWORD: ${GATEWAY_APP_PASSWORD:?set GATEWAY_APP_PASSWORD in .env}
+      USER_SVC_PASSWORD: ${USER_SVC_PASSWORD:?set USER_SVC_PASSWORD in .env}
+      KNOWLEDGE_SVC_PASSWORD: ${KNOWLEDGE_SVC_PASSWORD:?set KNOWLEDGE_SVC_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"   # bound to localhost only
     volumes:
