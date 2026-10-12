@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,6 +13,7 @@ from alembic.config import Config
 from dotenv import load_dotenv
 
 from scripts.seed_dev import seed
+from shared.db.database import Database
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_DB = "gateway_test"
@@ -57,3 +59,12 @@ def seeded(db_dsns: dict[str, str]) -> dict[str, str]:
         conn.execute("UPDATE tenants SET status = 'active'")
     asyncio.run(seed(db_dsns["owner"]))
     return db_dsns
+
+
+@pytest.fixture
+async def app_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
+    """A pool connected as the runtime role (`gateway_app`): what the gateway really uses."""
+    db = Database(seeded["app"])
+    await db.open()
+    yield db
+    await db.close()

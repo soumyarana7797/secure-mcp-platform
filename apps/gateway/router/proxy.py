@@ -12,11 +12,16 @@ from mcp_types import INVALID_PARAMS, CallToolResult, TextContent
 
 from apps.gateway.router.catalog import ToolCatalog
 from apps.gateway.router.connector import BackendAuth, NoBackendAuth
+from shared.audit.logger import AuditEvent, AuditSink, NullAudit
+from shared.audit.redact import args_hash, redact_args
 from shared.auth.principal import principal_var
+from shared.observability.context import request_id_var
 
 logger = logging.getLogger(__name__)
 
 MAX_REPORTED_ERRORS = 5
+# Outcomes where the authorization decision was a refusal (as opposed to a later failure).
+DENIED_OUTCOMES = frozenset({"denied", "unknown_tool"})
 
 
 def error_result(message: str) -> CallToolResult:
@@ -44,9 +49,15 @@ def _validation_messages(schema: dict[str, Any], arguments: dict[str, Any]) -> l
 
 
 class ToolProxy:
-    def __init__(self, catalog: ToolCatalog, backend_auth: BackendAuth | None = None) -> None:
+    def __init__(
+        self,
+        catalog: ToolCatalog,
+        backend_auth: BackendAuth | None = None,
+        audit: AuditSink | None = None,
+    ) -> None:
         self._catalog = catalog
         self._auth = backend_auth or NoBackendAuth()
+        self._audit = audit or NullAudit()
 
     async def call_tool(
         self,
@@ -57,8 +68,8 @@ class ToolProxy:
         started = time.perf_counter()
         outcome = "ok"
         principal = principal_var.get()
+        entry = self._catalog.get(public_name)
         try:
-            entry = self._catalog.get(public_name)
             if entry is None:
                 outcome = "unknown_tool"
                 raise MCPError(INVALID_PARAMS, f"Unknown tool: {public_name}")
@@ -89,11 +100,32 @@ class ToolProxy:
                 outcome = "tool_error"
             return result
         finally:
+            elapsed_ms = (time.perf_counter() - started) * 1000
             logger.info(
                 "tool_call tool=%s outcome=%s tenant=%s user=%s ms=%.1f",
                 public_name,
                 outcome,
                 principal.tenant_slug if principal else "-",
                 principal.user_id if principal else "-",
-                (time.perf_counter() - started) * 1000,
+                elapsed_ms,
             )
+            try:
+                self._audit.emit(
+                    AuditEvent(
+                        event_type="tool_call",
+                        decision="deny" if outcome in DENIED_OUTCOMES else "allow",
+                        outcome=outcome,
+                        request_id=request_id_var.get(),
+                        tenant_id=principal.tenant_id if principal else None,
+                        user_id=principal.user_id if principal else None,
+                        subject=principal.subject if principal else None,
+                        tool=public_name,
+                        latency_ms=round(elapsed_ms, 2),
+                        args_hash=args_hash(arguments or {}),
+                        redacted_args=redact_args(
+                            arguments, entry.tool.input_schema if entry else None
+                        ),
+                    )
+                )
+            except Exception:  # auditing must never change what the caller receives
+                logger.exception("failed to build audit event tool=%s", public_name)

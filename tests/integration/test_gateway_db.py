@@ -1,7 +1,6 @@
 """Real PostgreSQL: row-level security, grants, policy, pinning, and the full authorized path."""
 
 import json
-from collections.abc import AsyncIterator
 from uuid import UUID
 
 import httpx
@@ -22,14 +21,6 @@ from shared.registry.manifest import BackendManifest, ToolManifest
 from shared.registry.models import BackendSpec
 from shared.registry.repository import DbRegistryProvider
 from tests.integration.test_gateway import InProcessConnector, make_football, make_lab
-
-
-@pytest.fixture
-async def app_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
-    db = Database(seeded["app"])
-    await db.open()
-    yield db
-    await db.close()
 
 
 def tenant_id(dsns: dict[str, str], slug: str) -> UUID:
