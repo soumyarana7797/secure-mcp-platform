@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     required_scope: str = "mcp-gateway/tools"
     # Externally visible origin (the ALB / domain); used in OAuth discovery metadata.
     public_base_url: str = "http://127.0.0.1:9000"
+    # Ed25519 private key (PEM, base64). Signs gateway->backend tokens. From Secrets Manager in AWS.
+    internal_private_key_b64: str = ""
+    internal_token_ttl_s: int = 60
     database_url: str = ""  # runtime role (gateway_app); required unless a Database is injected
 
     host: str = "127.0.0.1"

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from mcp_types import Tool, ToolAnnotations
 
-from apps.gateway.router.connector import BackendConnector
+from apps.gateway.router.connector import BackendAuth, BackendConnector, NoBackendAuth
 from shared.registry.models import BackendSpec
 from shared.registry.pinning import PinnedTool, definition_hash
 from shared.registry.repository import LoadedRegistry, RegistryProvider
@@ -31,6 +31,7 @@ class CatalogTool:
     permission: str
     timeout_s: float
     connector: BackendConnector
+    spec: BackendSpec
 
 
 @dataclass
@@ -60,6 +61,7 @@ class ToolCatalog:
     registry: RegistryProvider
     connector_factory: ConnectorFactory
     discovery_timeout_s: float = 5.0
+    backend_auth: BackendAuth = field(default_factory=NoBackendAuth)
     _by_backend: dict[str, list[CatalogTool]] = field(default_factory=dict)
     _tools: dict[str, CatalogTool] = field(default_factory=dict)
     status: dict[str, BackendStatus] = field(default_factory=dict)
@@ -111,7 +113,8 @@ class ToolCatalog:
         connector = self.connector_factory(spec)
         try:
             async with asyncio.timeout(self.discovery_timeout_s):
-                async with connector.connect() as client:
+                headers = self.backend_auth.headers(spec, None)  # system identity
+                async with connector.connect(headers) as client:
                     live: list[Tool] = []
                     cursor: str | None = None
                     for _ in range(MAX_PAGES):
@@ -148,6 +151,7 @@ class ToolCatalog:
                         permission=pin.permission,
                         timeout_s=pin.timeout_s if pin.timeout_s is not None else spec.timeout_s,
                         connector=connector,
+                        spec=spec,
                     )
                 )
         status.missing = sorted(set(pinned) - live_names)

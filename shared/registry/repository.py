@@ -30,7 +30,10 @@ class StaticRegistryProvider(RegistryProvider):
         return self.registry
 
 
-_SERVERS = "SELECT id, name, url, timeout_s FROM mcp_servers WHERE status = 'active' ORDER BY name"
+_SERVERS = (
+    "SELECT id, name, url, audience, timeout_s FROM mcp_servers "
+    "WHERE status = 'active' ORDER BY name"
+)
 _TOOLS = """
 SELECT s.name AS server, t.name, t.description, t.input_schema, t.schema_hash,
        t.permission, t.timeout_s, t.annotations
@@ -62,6 +65,7 @@ class DbRegistryProvider(RegistryProvider):
             BackendSpec(
                 name=s["name"],
                 url=s["url"],
+                audience=s["audience"],
                 timeout_s=float(s["timeout_s"]),
                 tool_timeouts={
                     n: p.timeout_s for n, p in pinned[s["name"]].items() if p.timeout_s is not None

@@ -18,9 +18,15 @@ from apps.gateway.mcp_app import build_gateway_server
 from apps.gateway.middleware.auth import AuthMiddleware
 from apps.gateway.middleware.request_id import RequestIdMiddleware
 from apps.gateway.router.catalog import ConnectorFactory, ToolCatalog
-from apps.gateway.router.connector import HttpBackendConnector
+from apps.gateway.router.connector import (
+    BackendAuth,
+    HttpBackendConnector,
+    InternalBackendAuth,
+    NoBackendAuth,
+)
 from apps.gateway.router.proxy import ToolProxy
 from apps.gateway.routes import health, oauth
+from shared.auth.internal import InternalTokenSigner, load_private_key_b64
 from shared.auth.jwt_validator import HttpJwksSource, JwksCache, TokenValidator
 from shared.auth.resolver import (
     BearerTokenResolver,
@@ -45,6 +51,7 @@ def create_app(
     connector_factory: ConnectorFactory | None = None,
     resolver: PrincipalResolver | None = None,
     policy: PolicyEngine | None = None,
+    backend_auth: BackendAuth | None = None,
 ) -> FastAPI:
     """Builds the app. Every collaborator can be injected, which is how tests run without ports."""
     cfg = settings or Settings()
@@ -71,10 +78,25 @@ def create_app(
             resolver = DenyAllResolver()
     registry = registry or DbRegistryProvider(db)  # type: ignore[arg-type]
     policy = policy or DbPolicyEngine(db)  # type: ignore[arg-type]
+    if backend_auth is None:
+        if connector_factory is None:  # real HTTP backends: they will demand our token
+            if not cfg.internal_private_key_b64:
+                raise RuntimeError("GATEWAY_INTERNAL_PRIVATE_KEY_B64 is required")
+            signer = InternalTokenSigner(
+                load_private_key_b64(cfg.internal_private_key_b64), ttl_s=cfg.internal_token_ttl_s
+            )
+            backend_auth = InternalBackendAuth(signer)
+        else:
+            backend_auth = NoBackendAuth()
     connector_factory = connector_factory or HttpBackendConnector
 
-    catalog = ToolCatalog(registry, connector_factory, discovery_timeout_s=cfg.discovery_timeout_s)
-    proxy = ToolProxy(catalog)
+    catalog = ToolCatalog(
+        registry,
+        connector_factory,
+        discovery_timeout_s=cfg.discovery_timeout_s,
+        backend_auth=backend_auth,
+    )
+    proxy = ToolProxy(catalog, backend_auth)
     mcp_server = build_gateway_server(catalog, proxy, policy)
     mcp_http_app = mcp_server.streamable_http_app(
         stateless_http=True,

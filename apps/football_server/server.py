@@ -19,6 +19,8 @@ from starlette.applications import Starlette
 from apps.football_server.config import Settings
 from apps.football_server.domain import Competition, FixturesResult, LiveScoresResult
 from apps.football_server.provider import FootballProvider, HttpFootballProvider, ProviderError
+from shared.auth.internal import InternalTokenVerifier, load_public_key_b64
+from shared.auth.internal_middleware import InternalAuthMiddleware
 
 DateFrom = Annotated[date | None, Field(description="First day (UTC). Default: today.")]
 DateTo = Annotated[date | None, Field(description="Last day (UTC). Default: same as date_from.")]
@@ -84,11 +86,14 @@ def create_app(
     settings: Settings | None = None, provider: FootballProvider | None = None
 ) -> Starlette:
     cfg = settings or Settings()
+    if not cfg.internal_public_key_b64:
+        # Fail closed: a backend that accepts anonymous calls would bypass every gateway check.
+        raise RuntimeError("FOOTBALL_INTERNAL_PUBLIC_KEY_B64 is required")
     prov = provider or HttpFootballProvider(
         cfg.data_api_url, cfg.data_api_token, cfg.provider_timeout_s
     )
     mcp = build_mcp(prov, cfg)
-    return mcp.streamable_http_app(
+    app = mcp.streamable_http_app(
         stateless_http=True,
         json_response=True,
         host=cfg.host,
@@ -96,3 +101,8 @@ def create_app(
             enable_dns_rebinding_protection=True, allowed_hosts=cfg.allowed_hosts
         ),
     )
+    verifier = InternalTokenVerifier(
+        load_public_key_b64(cfg.internal_public_key_b64), cfg.internal_audience
+    )
+    app.add_middleware(InternalAuthMiddleware, verifier=verifier)
+    return app

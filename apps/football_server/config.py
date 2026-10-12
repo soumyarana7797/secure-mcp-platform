@@ -6,6 +6,9 @@ class Settings(BaseSettings):
 
     data_api_url: str = "http://127.0.0.1:9001"
     data_api_token: str  # required: from env (.env locally, Secrets Manager in AWS)
+    # Ed25519 public key (PEM, base64) of the gateway. Without it the server refuses to start.
+    internal_public_key_b64: str = ""
+    internal_audience: str = "mcp-football"
     provider_timeout_s: float = 3.0
     max_fixture_range_days: int = 14
     host: str = "127.0.0.1"

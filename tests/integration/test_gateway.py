@@ -91,7 +91,7 @@ class InProcessConnector:
         self.server = server
         self.broken = False
 
-    def connect(self) -> Client:
+    def connect(self, headers=None) -> Client:  # noqa: ANN001
         if self.broken:
             raise ConnectionError("backend down")
         return Client(self.server)
@@ -110,6 +110,7 @@ class Rig:
         self.pinned: dict[str, dict[str, PinnedTool]] = {}
         self.specs: list[BackendSpec] = []
         self.lab_calls: list[str] = []
+        self.backend_auth = None
         self.catalog: ToolCatalog
         self.server = None
 
@@ -122,11 +123,17 @@ class Rig:
         return StaticRegistryProvider(LoadedRegistry(list(self.specs), self.pinned))
 
     async def start(self) -> None:
+        kwargs = {"backend_auth": self.backend_auth} if self.backend_auth else {}
         self.catalog = ToolCatalog(
-            self.registry(), lambda spec: self.connectors[spec.name], discovery_timeout_s=2
+            self.registry(),
+            lambda spec: self.connectors[spec.name],
+            discovery_timeout_s=2,
+            **kwargs,
         )
         await self.catalog.refresh()
-        self.server = build_gateway_server(self.catalog, ToolProxy(self.catalog), POLICY)
+        self.server = build_gateway_server(
+            self.catalog, ToolProxy(self.catalog, self.backend_auth), POLICY
+        )
 
     def client(self, *roles: str) -> Client:
         # The auth middleware sets this per HTTP request; tests set it directly.
@@ -134,12 +141,17 @@ class Rig:
         return Client(self.server)
 
 
-async def make_rig(lab_timeout: float = 5.0, with_ghost: bool = False) -> Rig:
+async def make_rig(
+    lab_timeout: float = 5.0,
+    with_ghost: bool = False,
+    backend_auth=None,  # noqa: ANN001
+) -> Rig:
     rig = Rig()
+    rig.backend_auth = backend_auth
     football = make_football()
     lab, rig.lab_calls = make_lab()
     await rig.add(
-        BackendSpec(name="football", url="x"),
+        BackendSpec(name="football", url="x", audience="mcp-football"),
         football,
         {"get_fixtures": "football:read", "get_live_scores": "football:read"},
     )

@@ -11,6 +11,7 @@ from mcp import MCPError
 from mcp_types import INVALID_PARAMS, CallToolResult, TextContent
 
 from apps.gateway.router.catalog import ToolCatalog
+from apps.gateway.router.connector import BackendAuth, NoBackendAuth
 from shared.auth.principal import principal_var
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,9 @@ def _validation_messages(schema: dict[str, Any], arguments: dict[str, Any]) -> l
 
 
 class ToolProxy:
-    def __init__(self, catalog: ToolCatalog) -> None:
+    def __init__(self, catalog: ToolCatalog, backend_auth: BackendAuth | None = None) -> None:
         self._catalog = catalog
+        self._auth = backend_auth or NoBackendAuth()
 
     async def call_tool(
         self,
@@ -73,7 +75,8 @@ class ToolProxy:
 
             try:
                 async with asyncio.timeout(entry.timeout_s):
-                    async with entry.connector.connect() as client:
+                    headers = self._auth.headers(entry.spec, principal, entry.original_name)
+                    async with entry.connector.connect(headers) as client:
                         result = await client.call_tool(entry.original_name, args)
             except TimeoutError:
                 outcome = "timeout"
