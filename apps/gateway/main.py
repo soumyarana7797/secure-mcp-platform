@@ -16,6 +16,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from apps.gateway.config import Settings
 from apps.gateway.mcp_app import build_gateway_server
 from apps.gateway.middleware.auth import AuthMiddleware
+from apps.gateway.middleware.rate_limit import RateLimitMiddleware
 from apps.gateway.middleware.request_id import RequestIdMiddleware
 from apps.gateway.router.catalog import ConnectorFactory, ToolCatalog
 from apps.gateway.router.connector import (
@@ -40,6 +41,8 @@ from shared.db.database import Database
 from shared.observability.context import request_id_var
 from shared.observability.logging import configure_logging
 from shared.policies.engine import DbPolicyEngine, PolicyEngine
+from shared.rate_limit.limiter import InMemoryTokenBucket, RateLimiter
+from shared.rate_limit.policies import DbPolicyStore, PolicyStore, StaticPolicyStore
 from shared.registry.repository import DbRegistryProvider, RegistryProvider
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,8 @@ def create_app(
     policy: PolicyEngine | None = None,
     backend_auth: BackendAuth | None = None,
     audit: AuditSink | None = None,
+    limiter: RateLimiter | None = None,
+    limit_policies: PolicyStore | None = None,
 ) -> FastAPI:
     """Builds the app. Every collaborator can be injected, which is how tests run without ports."""
     cfg = settings or Settings()
@@ -79,8 +84,10 @@ def create_app(
             resolver = BearerTokenResolver(validator, lookup)
         else:
             resolver = DenyAllResolver()
-    registry = registry or DbRegistryProvider(db)  # type: ignore[arg-type]
-    policy = policy or DbPolicyEngine(db)  # type: ignore[arg-type]
+    if registry is None:
+        registry = DbRegistryProvider(db)  # type: ignore[arg-type]
+    if policy is None:
+        policy = DbPolicyEngine(db)  # type: ignore[arg-type]
     if backend_auth is None:
         if connector_factory is None:  # real HTTP backends: they will demand our token
             if not cfg.internal_private_key_b64:
@@ -91,7 +98,8 @@ def create_app(
             backend_auth = InternalBackendAuth(signer)
         else:
             backend_auth = NoBackendAuth()
-    connector_factory = connector_factory or HttpBackendConnector
+    if connector_factory is None:
+        connector_factory = HttpBackendConnector
 
     catalog = ToolCatalog(
         registry,
@@ -101,6 +109,10 @@ def create_app(
     )
     if audit is None:
         audit = AuditLogger(db) if db is not None else NullAudit()
+    if limiter is None:
+        limiter = InMemoryTokenBucket()
+    if limit_policies is None:
+        limit_policies = DbPolicyStore(db) if db is not None else StaticPolicyStore()
     proxy = ToolProxy(catalog, backend_auth, audit)
     mcp_server = build_gateway_server(catalog, proxy, policy)
     mcp_http_app = mcp_server.streamable_http_app(
@@ -148,7 +160,9 @@ def create_app(
     app.state.catalog = catalog
     app.state.db = db
 
-    # Last added = outermost: request ID first, then authentication, then routes.
+    # Last added = outermost: request ID, then authentication, then rate limiting, then routes.
+    app.add_middleware(RateLimitMiddleware, limiter=limiter, policies=limit_policies, audit=audit)
+
     async def record_auth_failure(scope: dict, status: int, reason: str) -> None:
         audit.emit(  # type: ignore[union-attr]
             AuditEvent(
