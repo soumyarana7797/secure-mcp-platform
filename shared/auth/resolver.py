@@ -104,7 +104,7 @@ class BearerTokenResolver:
             raise AuthFailure(exc.status, exc.error_code, description, exc.reason) from exc
         principal = await self._lookup(verified.subject)
         if principal is None:
-            # Valid token, but we do not know this person (or they are disabled): known, not allowed.
+            # Valid token, but we do not know this person (or they are disabled).
             raise AuthFailure(
                 403, "access_denied", "This account is not provisioned.", "unprovisioned"
             )
