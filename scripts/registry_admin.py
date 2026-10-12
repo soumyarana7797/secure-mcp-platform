@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
+from shared.auth.internal import InternalTokenSigner, load_private_key_b64
 from shared.registry.admin import fetch_live_tools, sync_backend
 from shared.registry.manifest import Manifest
 
@@ -22,13 +23,20 @@ load_dotenv()
 
 async def cmd_sync(args: argparse.Namespace) -> int:
     manifest = Manifest.from_toml(args.manifest)
+    # Backends only accept gateway-signed tokens, so the operator tool signs a discovery token too.
+    signer = InternalTokenSigner(
+        load_private_key_b64(os.environ["GATEWAY_INTERNAL_PRIVATE_KEY_B64"])
+    )
     exit_code = 0
     async with await AsyncConnection.connect(
         os.environ["GATEWAY_MIGRATION_DATABASE_URL"], row_factory=dict_row
     ) as conn:
         for backend in manifest.backends:
             try:
-                live = await fetch_live_tools(backend.url)
+                token = signer.mint(audience=backend.audience, principal=None)
+                live = await fetch_live_tools(
+                    backend.url, headers={"Authorization": f"Bearer {token}"}
+                )
             except Exception as exc:
                 print(f"[{backend.name}] cannot reach backend: {type(exc).__name__}")
                 exit_code = 1

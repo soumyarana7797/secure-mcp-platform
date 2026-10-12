@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import httpx2
 from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
 from mcp_types import Tool
 from psycopg import AsyncConnection
 
@@ -25,16 +28,20 @@ class SyncReport:
     applied_changes: bool = False
 
 
-async def fetch_live_tools(url: str, timeout_s: float = 10.0) -> list[Tool]:
-    async with asyncio.timeout(timeout_s), Client(url) as client:
-        tools: list[Tool] = []
-        cursor = None
-        while True:
-            page = await client.list_tools(cursor=cursor)
-            tools.extend(page.tools)
-            cursor = page.next_cursor
-            if not cursor:
-                return tools
+async def fetch_live_tools(
+    url: str, timeout_s: float = 10.0, headers: Mapping[str, str] | None = None
+) -> list[Tool]:
+    """List a backend's tools. Backends demand a gateway-signed token, so callers pass headers."""
+    async with asyncio.timeout(timeout_s), httpx2.AsyncClient(headers=dict(headers or {})) as http:
+        async with Client(streamable_http_client(url, http_client=http)) as client:
+            tools: list[Tool] = []
+            cursor = None
+            while True:
+                page = await client.list_tools(cursor=cursor)
+                tools.extend(page.tools)
+                cursor = page.next_cursor
+                if not cursor:
+                    return tools
 
 
 async def sync_backend(

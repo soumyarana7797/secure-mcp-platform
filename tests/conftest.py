@@ -85,3 +85,14 @@ async def user_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
     await db.open()
     yield db
     await db.close()
+
+
+@pytest.fixture
+async def knowledge_db(seeded: dict[str, str]) -> AsyncIterator[Database]:
+    """A pool connected as `knowledge_svc`, the knowledge server's read-only role."""
+    if "knowledge" not in seeded:
+        pytest.skip("KNOWLEDGE_SERVER_DATABASE_URL not set (see .env.example)")
+    db = Database(seeded["knowledge"])
+    await db.open()
+    yield db
+    await db.close()

@@ -13,3 +13,22 @@ permission = "football:read"
 [backends.tools.get_live_scores]
 permission = "football:read"
 timeout_s = 3.0
+
+[[backends]]
+name = "user"
+url = "http://127.0.0.1:9003/mcp"
+audience = "mcp-user"
+timeout_s = 5.0
+
+[backends.tools.get_user_profile]
+permission = "users:read"
+
+[[backends]]
+name = "knowledge"
+url = "http://127.0.0.1:9004/mcp"
+audience = "mcp-knowledge"
+timeout_s = 8.0
+
+[backends.tools.search_company_docs]
+permission = "knowledge:read"
+timeout_s = 8.0
