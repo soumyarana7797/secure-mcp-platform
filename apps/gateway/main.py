@@ -28,6 +28,7 @@ from apps.gateway.router.connector import (
 from apps.gateway.router.proxy import ToolProxy
 from apps.gateway.routes import health, oauth
 from shared.audit.logger import AuditEvent, AuditLogger, AuditSink, NullAudit
+from shared.audit.throttle import AuditThrottle
 from shared.auth.internal import InternalTokenSigner, load_private_key_b64
 from shared.auth.jwt_validator import HttpJwksSource, JwksCache, TokenValidator
 from shared.auth.resolver import (
@@ -163,15 +164,19 @@ def create_app(
     # Last added = outermost: request ID, then authentication, then rate limiting, then routes.
     app.add_middleware(RateLimitMiddleware, limiter=limiter, policies=limit_policies, audit=audit)
 
+    auth_throttle = AuditThrottle(interval_s=1.0)
+
     async def record_auth_failure(scope: dict, status: int, reason: str) -> None:
+        record, suppressed = auth_throttle.admit(reason)
+        if not record:
+            return
         audit.emit(  # type: ignore[union-attr]
             AuditEvent(
                 event_type="auth_failed",
                 decision="deny",
                 outcome=reason,
                 request_id=request_id_var.get(),
-                tool=None,
-                args_hash=None,
+                redacted_args={"suppressed_since_last": suppressed},
             )
         )
 

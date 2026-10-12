@@ -142,7 +142,8 @@ async def test_user_over_limit_gets_429_with_retry_after_and_an_audit_record() -
     assert codes == [200, 200, 200, 429, 429]
     assert blocked.headers["retry-after"] == "1" and blocked.json() == {"error": "rate_limited"}
     limited = [e for e in audit.events if e.event_type == "rate_limited"]
-    assert len(limited) == 3 and limited[0].outcome == "user_limit"
+    assert len(limited) == 1 and limited[0].outcome == "user_limit"  # a flood is ONE record...
+    assert limited[0].redacted_args == {"suppressed_since_last": 0}
     assert limited[0].user_id == alice.user_id and limited[0].decision == "deny"
 
 
@@ -236,3 +237,31 @@ async def test_health_discovery_and_unauthenticated_requests_do_not_spend_anyone
                 assert (await hit(c, "nobody")).status_code == 401  # unauthenticated
             assert (await hit(c, "alice")).status_code == 200  # budget untouched
     assert not [e for e in audit.events if e.event_type == "rate_limited"]
+
+
+@pytest.mark.anyio
+async def test_a_flood_cannot_fill_the_audit_trail() -> None:
+    clock = Clock()
+    alice = person(name="alice")
+    policies = StaticPolicyStore({"tenant": Limit(6000, 1000), "user": Limit(60, 1)})
+    app, audit = await start({"alice": alice}, policies, clock)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE) as c:
+            codes = [(await hit(c, "alice")).status_code for _ in range(200)]
+    assert codes.count(429) == 199  # every excess request is still rejected...
+    assert (
+        len([e for e in audit.events if e.event_type == "rate_limited"]) == 1
+    )  # ...but not stored
+
+
+@pytest.mark.anyio
+async def test_unauthenticated_floods_are_collapsed_per_reason() -> None:
+    app, audit = await start({}, StaticPolicyStore(), Clock())
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE) as c:
+            for _ in range(100):
+                assert (await hit(c, "nobody")).status_code == 401
+    failures = [e for e in audit.events if e.event_type == "auth_failed"]
+    assert len(failures) == 1 and failures[0].outcome == "no_credentials"

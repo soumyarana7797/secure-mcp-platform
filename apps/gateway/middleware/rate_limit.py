@@ -10,6 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from apps.gateway.middleware.auth import PUBLIC_PATHS, PUBLIC_PREFIXES
 from shared.audit.logger import AuditEvent, AuditSink
+from shared.audit.throttle import AuditThrottle
 from shared.auth.principal import principal_var
 from shared.observability.context import request_id_var
 from shared.rate_limit.limiter import RateLimiter
@@ -28,6 +29,7 @@ class RateLimitMiddleware:
         self.limiter = limiter
         self.policies = policies
         self.audit = audit
+        self.throttle = AuditThrottle(interval_s=10.0)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope["path"] if scope["type"] == "http" else ""
@@ -49,17 +51,21 @@ class RateLimitMiddleware:
             limit = await self.policies.limit_for(level, owner)
             decision = await self.limiter.check(key, limit)
             if not decision.allowed:
-                self.audit.emit(
-                    AuditEvent(
-                        event_type="rate_limited",
-                        decision="deny",
-                        outcome=f"{level}_limit",
-                        request_id=request_id_var.get(),
-                        tenant_id=principal.tenant_id,
-                        user_id=principal.user_id,
-                        subject=principal.subject,
+                # A flood is one audit record with a count, not one record per rejected request.
+                record, suppressed = self.throttle.admit(f"{level}:{key}")
+                if record:
+                    self.audit.emit(
+                        AuditEvent(
+                            event_type="rate_limited",
+                            decision="deny",
+                            outcome=f"{level}_limit",
+                            request_id=request_id_var.get(),
+                            tenant_id=principal.tenant_id,
+                            user_id=principal.user_id,
+                            subject=principal.subject,
+                            redacted_args={"suppressed_since_last": suppressed},
+                        )
                     )
-                )
                 body = json.dumps({"error": "rate_limited"}).encode()
                 await send(
                     {
