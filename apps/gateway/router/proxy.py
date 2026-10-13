@@ -10,12 +10,15 @@ from jsonschema.exceptions import ValidationError
 from mcp import MCPError
 from mcp_types import INVALID_PARAMS, CallToolResult, TextContent
 
-from apps.gateway.router.catalog import ToolCatalog
+from apps.gateway.router.catalog import CatalogTool, ToolCatalog
 from apps.gateway.router.connector import BackendAuth, NoBackendAuth
+from apps.gateway.router.resilience import GuardRegistry
 from shared.audit.logger import AuditEvent, AuditSink, NullAudit
 from shared.audit.redact import args_hash, redact_args
-from shared.auth.principal import principal_var
+from shared.auth.principal import Principal, principal_var
 from shared.observability.context import request_id_var
+from shared.resilience.bulkhead import BulkheadFull
+from shared.resilience.retry import retry
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +57,28 @@ class ToolProxy:
         catalog: ToolCatalog,
         backend_auth: BackendAuth | None = None,
         audit: AuditSink | None = None,
+        guards: GuardRegistry | None = None,
     ) -> None:
         self._catalog = catalog
+        self._guards = guards or GuardRegistry()
+        self._retry_attempts = self._guards.config.retry_attempts
+        self._retry_base_delay_s = self._guards.config.retry_base_delay_s
         self._auth = backend_auth or NoBackendAuth()
         self._audit = audit or NullAudit()
+
+    async def _invoke(
+        self, entry: CatalogTool, args: dict[str, Any], principal: Principal | None
+    ) -> CallToolResult:
+        """One logical call. Read-only tools are retried on connection-level failures; every try
+        gets a fresh signed token and all tries share the caller's overall deadline."""
+
+        async def once() -> CallToolResult:
+            headers = self._auth.headers(entry.spec, principal, entry.original_name)
+            async with entry.connector.connect(headers) as client:
+                return await client.call_tool(entry.original_name, args)
+
+        attempts = self._retry_attempts if entry.retryable else 1
+        return await retry(once, attempts=attempts, base_delay_s=self._retry_base_delay_s)
 
     async def call_tool(
         self,
@@ -84,18 +105,35 @@ class ToolProxy:
                 outcome = "invalid_args"
                 return error_result(f"Invalid arguments for {public_name}: " + "; ".join(problems))
 
+            guard = self._guards.guard(entry.backend)
+            if not guard.breaker.allow():
+                outcome = "circuit_open"  # fail fast: do not queue behind a dead backend
+                return error_result(
+                    f"Backend '{entry.backend}' is temporarily unavailable. Try again shortly."
+                )
             try:
-                async with asyncio.timeout(entry.timeout_s):
-                    headers = self._auth.headers(entry.spec, principal, entry.original_name)
-                    async with entry.connector.connect(headers) as client:
-                        result = await client.call_tool(entry.original_name, args)
+                async with guard.bulkhead.slot(), asyncio.timeout(entry.timeout_s):
+                    result = await self._invoke(entry, args, principal)
+            except asyncio.CancelledError:
+                guard.breaker.record_neutral()  # the caller went away: settle any trial slot
+                outcome = "cancelled"
+                raise
+            except BulkheadFull:
+                guard.breaker.record_neutral()  # overload is not evidence the backend is sick
+                outcome = "overloaded"
+                return error_result(f"Backend '{entry.backend}' is busy. Try again shortly.")
             except TimeoutError:
+                guard.breaker.record_failure()
                 outcome = "timeout"
                 return error_result(f"{public_name} timed out after {entry.timeout_s:g}s")
             except Exception:
+                guard.breaker.record_failure()
                 outcome = "backend_error"
                 logger.exception("backend call failed tool=%s", public_name)
                 return error_result(f"Backend '{entry.backend}' is unavailable")
+            # The backend answered. A tool-level error (bad input it rejected, a missing record)
+            # is NOT counted against it: otherwise one tenant could open the circuit for all.
+            guard.breaker.record_success()
             if result.is_error:
                 outcome = "tool_error"
             return result

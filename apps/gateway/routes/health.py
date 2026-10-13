@@ -13,6 +13,7 @@ async def healthz() -> dict[str, str]:
 async def readyz(request: Request, response: Response) -> dict[str, object]:
     """Readiness: registry loaded, a backend serving tools, and the database reachable."""
     catalog = request.app.state.catalog
+    circuits = request.app.state.guards.circuit_states()
     db = request.app.state.db
     db_ok = await db.ping() if db is not None else True
     ready = catalog.ready and db_ok
@@ -27,6 +28,7 @@ async def readyz(request: Request, response: Response) -> dict[str, object]:
                 "healthy": s.healthy,
                 "exposed_tools": s.exposed,
                 "degraded": bool(s.drifted or s.missing),
+                "circuit": circuits.get(name, "closed"),
             }
             for name, s in catalog.status.items()
         },

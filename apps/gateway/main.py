@@ -26,6 +26,7 @@ from apps.gateway.router.connector import (
     NoBackendAuth,
 )
 from apps.gateway.router.proxy import ToolProxy
+from apps.gateway.router.resilience import GuardRegistry, ResilienceConfig
 from apps.gateway.routes import health, oauth
 from shared.audit.logger import AuditEvent, AuditLogger, AuditSink, NullAudit
 from shared.audit.throttle import AuditThrottle
@@ -60,6 +61,7 @@ def create_app(
     backend_auth: BackendAuth | None = None,
     audit: AuditSink | None = None,
     limiter: RateLimiter | None = None,
+    guards: GuardRegistry | None = None,
     limit_policies: PolicyStore | None = None,
 ) -> FastAPI:
     """Builds the app. Every collaborator can be injected, which is how tests run without ports."""
@@ -114,7 +116,20 @@ def create_app(
         limiter = InMemoryTokenBucket()
     if limit_policies is None:
         limit_policies = DbPolicyStore(db) if db is not None else StaticPolicyStore()
-    proxy = ToolProxy(catalog, backend_auth, audit)
+    if guards is None:
+        guards = GuardRegistry(
+            ResilienceConfig(
+                max_concurrency=cfg.backend_max_concurrency,
+                queue_timeout_s=cfg.backend_queue_timeout_s,
+                retry_attempts=cfg.retry_attempts,
+                retry_base_delay_s=cfg.retry_base_delay_s,
+                breaker_min_calls=cfg.breaker_min_calls,
+                breaker_failure_rate=cfg.breaker_failure_rate,
+                breaker_window_s=cfg.breaker_window_s,
+                breaker_reset_s=cfg.breaker_reset_s,
+            )
+        )
+    proxy = ToolProxy(catalog, backend_auth, audit, guards)
     mcp_server = build_gateway_server(catalog, proxy, policy)
     mcp_http_app = mcp_server.streamable_http_app(
         stateless_http=True,
@@ -159,6 +174,7 @@ def create_app(
     app = FastAPI(title="Secure MCP Gateway", lifespan=lifespan)
     app.state.settings = cfg
     app.state.catalog = catalog
+    app.state.guards = guards
     app.state.db = db
 
     # Last added = outermost: request ID, then authentication, then rate limiting, then routes.

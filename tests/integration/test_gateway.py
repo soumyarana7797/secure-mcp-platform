@@ -111,6 +111,8 @@ class Rig:
         self.specs: list[BackendSpec] = []
         self.lab_calls: list[str] = []
         self.backend_auth = None
+        self.guards = None
+        self.audit = None
         self.catalog: ToolCatalog
         self.server = None
 
@@ -132,7 +134,9 @@ class Rig:
         )
         await self.catalog.refresh()
         self.server = build_gateway_server(
-            self.catalog, ToolProxy(self.catalog, self.backend_auth), POLICY
+            self.catalog,
+            ToolProxy(self.catalog, self.backend_auth, self.audit, self.guards),
+            POLICY,
         )
 
     def client(self, *roles: str) -> Client:
@@ -460,7 +464,12 @@ async def test_http_authenticated_request_sees_only_permitted_tools() -> None:
     assert hostile.headers["x-request-id"] != "bad id\twith junk"
     assert wrong_host.status_code in (401, 421)  # rejected either way; never served
     body = ready.json()
-    assert body["backends"]["football"] == {"healthy": True, "exposed_tools": 2, "degraded": False}
+    assert body["backends"]["football"] == {
+        "healthy": True,
+        "exposed_tools": 2,
+        "degraded": False,
+        "circuit": "closed",
+    }
     assert "drifted" not in body["backends"]["football"]  # public endpoint stays minimal
 
 

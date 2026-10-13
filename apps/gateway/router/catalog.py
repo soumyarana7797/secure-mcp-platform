@@ -32,6 +32,7 @@ class CatalogTool:
     timeout_s: float
     connector: BackendConnector
     spec: BackendSpec
+    retryable: bool = False  # safe to repeat: the pinned definition marks it read-only
 
 
 @dataclass
@@ -42,6 +43,11 @@ class BackendStatus:
     drifted: list[str] = field(default_factory=list)  # live definition != pin: hidden
     unregistered: list[str] = field(default_factory=list)  # live but never pinned: hidden
     missing: list[str] = field(default_factory=list)  # pinned but not served: hidden
+
+
+def _is_read_only(pin: PinnedTool) -> bool:
+    """Retries are only safe for tools an admin pinned as read-only."""
+    return bool(pin.annotations and pin.annotations.get("read_only_hint"))
 
 
 def _public_tool(public_name: str, pin: PinnedTool) -> Tool:
@@ -152,6 +158,7 @@ class ToolCatalog:
                         timeout_s=pin.timeout_s if pin.timeout_s is not None else spec.timeout_s,
                         connector=connector,
                         spec=spec,
+                        retryable=_is_read_only(pin),
                     )
                 )
         status.missing = sorted(set(pinned) - live_names)

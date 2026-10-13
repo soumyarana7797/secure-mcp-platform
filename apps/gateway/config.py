@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     # Allowed HTTP Host headers (DNS-rebinding protection). Add the public name behind the ALB.
     allowed_hosts: list[str] = ["127.0.0.1:*", "localhost:*"]
     catalog_refresh_s: float = 30.0
+    # Resilience (per backend). See apps/gateway/router/resilience.py.
+    backend_max_concurrency: int = 20
+    backend_queue_timeout_s: float = 0.25
+    retry_attempts: int = 2  # total tries; 1 disables retries
+    retry_base_delay_s: float = 0.05
+    breaker_min_calls: int = 10
+    breaker_failure_rate: float = 0.5
+    breaker_window_s: float = 30.0
+    breaker_reset_s: float = 15.0
     discovery_timeout_s: float = 5.0
 
     @model_validator(mode="after")
